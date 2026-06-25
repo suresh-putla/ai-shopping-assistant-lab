@@ -1,0 +1,25 @@
+services:
+  streamlit-app:
+    build:
+      context: .
+      dockerfile: apps/chat_bot_ui/Dockerfile
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    restart: always
+    volumes:
+      - ./apps/chat_bot_ui/src:/app/apps/chat_bot_ui/src
+
+  
+  api-app:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    restart: always
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
