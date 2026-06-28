@@ -14,7 +14,7 @@ ragas_embeddings = LangchainEmbeddingsWrapper(OpenAIEmbeddings(model="text-embed
 dataset_name = "Amazon-shopping-collection-01-dataset"
 qdrant_client = QdrantClient(url="http://localhost:6333")
 #--------------------------------------------------------------
-def ragas_context_precision_id_based(run, example):
+async def ragas_context_precision_id_based(run, example):
     print(f"run:{run}")
     print(f"example:{example}")
     print(f"retrieved_context_ids: {run.outputs["retrieved_context_ids"]}")
@@ -26,9 +26,9 @@ def ragas_context_precision_id_based(run, example):
     #print(sample)
     scorer = IDBasedContextPrecision()
 
-    return scorer.single_turn_ascore(sample)
+    return await scorer.single_turn_ascore(sample)
 #--------------------------------------------------------------
-def ragas_context_recall_id_based(run, example):
+async def ragas_context_recall_id_based(run, example):
     print(f"run:{run}")
     print(f"example:{example}")
     sample = SingleTurnSample(
@@ -38,9 +38,9 @@ def ragas_context_recall_id_based(run, example):
 
     scorer = IDBasedContextRecall()
 
-    return scorer.single_turn_ascore(sample)
+    return await scorer.single_turn_ascore(sample)
 #--------------------------------------------------------------
-def ragas_faithfulness(run, example):
+async def ragas_faithfulness(run, example):
     print(f"run:{run}")
     print("----------------")
     print(f"Query:{run.outputs["query"]}")
@@ -60,9 +60,9 @@ def ragas_faithfulness(run, example):
 
     scorer = Faithfulness(llm=ragas_llm)
     
-    return scorer.single_turn_ascore(sample)
+    return await scorer.single_turn_ascore(sample)
 #--------------------------------------------------------------
-def ragas_relevancy(run, example):
+async def ragas_relevancy(run, example):
     print(f"run:{run}")
     sample = SingleTurnSample(
         user_input=run.outputs["query"],
@@ -72,14 +72,16 @@ def ragas_relevancy(run, example):
 
     scorer = ResponseRelevancy(llm=ragas_llm, embeddings=ragas_embeddings)
 
-    return scorer.single_turn_ascore(sample)
+    return await scorer.single_turn_ascore(sample)
 #--------------------------------------------------------------
 results= ls_client.evaluate(
     lambda x: rag_pipeline(x["question"], qdrant_client),
     data=dataset_name,
     evaluators=[
         ragas_context_precision_id_based,
-        ragas_context_recall_id_based
+        ragas_context_recall_id_based,
+        ragas_faithfulness,
+        ragas_relevancy
     ],
     experiment_prefix="retriever"
 )
