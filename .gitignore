@@ -59,6 +59,9 @@ coverage.xml
 *.env
 docker-compose.override.yml
 
+# Vector DB / local data stores
+qdrant_data/
+
 # Misc
 *.log
 *.sqlite3
@@ -72,3 +75,4 @@ yarn-error.log*
 
 # Notebooks
 notebooks/
+data/
