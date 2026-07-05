@@ -1,27 +1,42 @@
 # AI Shopping Assistant Lab
 
-A RAG-based shopping assistant that answers product questions using a vector database of Amazon product data. Includes a FastAPI backend, a Streamlit chat UI, and a RAGAS evaluation pipeline.
+A production-grade RAG (Retrieval-Augmented Generation) shopping assistant that answers product questions using hybrid search and structured LLM outputs. Features include a FastAPI backend, Streamlit chat UI, citation grounding, and RAGAS evaluation pipeline.
+
+## ✨ Week 02 Highlights
+
+- 🔍 **Hybrid Search**: Dense vector + BM25 sparse search with Reciprocal Rank Fusion (RRF)
+- 📊 **Structured Outputs**: Type-safe LLM responses using Instructor library
+- 🎯 **Citation Grounding**: Answers linked to specific products with images and prices
+- 📝 **Prompt Templates**: Jinja2-based prompt management for easy iteration
+- 📈 **Enhanced Observability**: Token tracking and detailed LangSmith traces
 
 ## Architecture
 
 ```
 User → Streamlit UI (8501) → FastAPI (8000) → Qdrant (6333)
                                      ↓
-                               OpenAI (embeddings + LLM)
+                        OpenAI (embeddings + LLM w/ Instructor)
                                      ↓
                               LangSmith (tracing)
 ```
 
-**Services:**
-- `streamlit-app` — chat interface at `http://localhost:8501`
-- `api-app` — FastAPI RAG backend at `http://localhost:8000`
-- `qdrant` — vector database at `http://localhost:6333`
+**Quick Links:**
+- 📚 [CHANGELOG](CHANGELOG.md) - Release notes and version history
+- 🏗️ [ARCHITECTURE](docs/ARCHITECTURE.md) - System design and diagrams
+- 🔧 [TECHNICAL](docs/TECHNICAL.md) - Deep implementation details
 
-**RAG pipeline** (`apps/api`):
-1. Embed the user query with `text-embedding-3-small`
-2. Retrieve top-5 product descriptions from the `Amazon-shopping-collection-01` Qdrant collection
-3. Build a prompt with retrieved context
-4. Generate an answer with `gpt-5.4-nano` via OpenAI
+**Services:**
+- `streamlit-app` — chat interface with product suggestions at `http://localhost:8501`
+- `api-app` — FastAPI RAG backend at `http://localhost:8000`
+- `qdrant` — vector database with hybrid search at `http://localhost:6333`
+
+**RAG Pipeline** (`apps/api`) - Week 02:
+1. **Embed** the user query with `text-embedding-3-small` (OpenAI)
+2. **Hybrid Search** - Combine dense vector + BM25 sparse search using RRF (weights: [3, 1])
+3. **Retrieve** top-5 products from `Amazon-shopping-collection-01-hybrid-search` collection
+4. **Build Prompt** using Jinja2 templates with product context
+5. **Generate** structured answer with product citations using Instructor + `gpt-5.4-nano`
+6. **Enrich** response with product images, prices, and details from Qdrant
 
 ## Project Structure
 
@@ -68,7 +83,13 @@ ai-shopping-assistant-lab/
    LANGSMITH_TRACING=true       # optional
    ```
 
-2. **Populate Qdrant** with Amazon product embeddings into the `Amazon-shopping-collection-01` collection before running the stack. (See your data ingestion notebook.)
+2. **⚠️ Week 02 Update**: Populate Qdrant with **hybrid search collection**
+   
+   Create collection `Amazon-shopping-collection-01-hybrid-search` with:
+   - Dense vectors: `text-embedding-3-small` (size: 1536, distance: Cosine)
+   - Sparse vectors: `bm25` (built-in Qdrant BM25)
+   
+   See [TECHNICAL.md](docs/TECHNICAL.md#database-schema) for details.
 
 ## Running with Docker Compose
 
@@ -104,13 +125,31 @@ streamlit run chat_bot_ui/app.py
 
 ### `POST /rag`
 
+**Request:**
 ```json
-// Request
-{ "query": "What wireless headphones do you have?" }
-
-// Response
-{ "answer": "We have the following wireless headphones..." }
+{
+  "query": "What wireless headphones do you have?"
+}
 ```
+
+**Response (Week 02):**
+```json
+{
+  "answer": "We have the following wireless headphones...",
+  "used_context": [
+    {
+      "image_url": "https://m.media-amazon.com/images/...",
+      "price": "79.99",
+      "description": "Wireless over-ear headphones with..."
+    }
+  ]
+}
+```
+
+**Key Changes from Week 01:**
+- Added `used_context` array with product citations
+- Each context item includes image URL, price, and description
+- LLM responses now include structured product references
 
 ## Evaluation
 
@@ -128,6 +167,30 @@ Run the eval (requires a running Qdrant at `localhost:6333` and a populated Lang
 uv run python apps/api/evals/eval_retriever.py
 ```
 
+## Features
+
+### Week 02 Enhancements
+
+- **Hybrid Search with RRF**: Combines semantic understanding (dense vectors) with keyword precision (BM25)
+  - Prefetch 20 candidates per method
+  - Weighted fusion: 3x dense, 1x sparse
+  - Optimal balance of recall and precision
+
+- **Structured LLM Outputs**: Instructor library ensures type-safe, validated responses
+  - Automatic retry on validation failures
+  - Pydantic schemas for API contracts
+  - Citations linked to retrieved products
+
+- **Citation Grounding**: Every answer traceable to source products
+  - Product IDs extracted from LLM response
+  - Enriched with images, prices, and metadata
+  - Visual product cards in UI sidebar
+
+- **Prompt Management**: Jinja2 templates for maintainable prompts
+  - Version-controlled YAML configurations
+  - Easy A/B testing without code changes
+  - Metadata tracking (author, version, description)
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -137,3 +200,23 @@ uv run python apps/api/evals/eval_retriever.py
 | `GROQ_API_KEY` | Yes | For Groq LLM (alternative provider) |
 | `LANGSMITH_API_KEY` | No | Enables LangSmith tracing |
 | `LANGSMITH_TRACING` | No | Set to `true` to enable tracing |
+
+## Documentation
+
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history and release notes
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture with diagrams
+- **[docs/TECHNICAL.md](docs/TECHNICAL.md)** - Implementation deep-dive
+  - Hybrid search details (RRF algorithm, weight selection)
+  - Instructor integration (structured outputs, validation)
+  - Prompt management (Jinja2 templates, best practices)
+  - Database schema (Qdrant collection configuration)
+  - Performance optimization strategies
+
+## Migration from Week 01
+
+⚠️ **Breaking Changes**:
+- Collection name changed to `Amazon-shopping-collection-01-hybrid-search`
+- Requires BM25 sparse vectors (re-indexing needed)
+- API response includes new `used_context` field
+
+See [CHANGELOG.md](CHANGELOG.md#migration-notes) for detailed migration guide.
