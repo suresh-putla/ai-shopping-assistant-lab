@@ -76,3 +76,9 @@ yarn-error.log*
 # Notebooks
 notebooks/
 data/
+
+# Graphify generated knowledge graph
+graphify-out/
+
+# Claude Code local/personal overrides (not shared with team)
+.claude/settings.local.json
