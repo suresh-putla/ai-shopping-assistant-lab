@@ -1,4 +1,5 @@
 from openai import OpenAI
+import cohere
 from qdrant_client import QdrantClient
 from dotenv import load_dotenv
 from langsmith import traceable, get_current_run_tree
@@ -32,22 +33,28 @@ def get_embedding(text, model="text-embedding-3-small"):
     response = openai.embeddings.create(input=text, model="text-embedding-3-small")
     return response.data[0].embedding
 #--------------------------------------------------------------
-@traceable( name = "retrieve_context" )
-def retrieve_context(query, qdrant_client, k=5):
+@traceable( name = "retrieve_data" )
+def retrieve_data(query, qdrant_client, k=5, hybrid=True):
 
     query_embedding = get_embedding(query)
     
-    #results = qdrant_client.query_points(collection_name=qdrant_collection_name, query=query_embedding, limit=k)
-
-    # Sprint 1 : lesson 5 - Weighted RRF
-    results = qdrant_client.query_points(
-        collection_name=qdrant_collection_name, 
-        prefetch = [
-            Prefetch(query = query_embedding, using = "text-embedding-3-small", limit = 20),
-            Prefetch(query = Document(text=query, model = "qdrant/bm25"), using = "bm25", limit = 20)
-        ],
-        query=models.RrfQuery(rrf = models.Rrf(weights=[3,1])),
-        limit=k)
+    if hybrid:
+        # Sprint 1 : lesson 5 - Weighted RRF
+        results = qdrant_client.query_points(
+            collection_name=qdrant_collection_name, 
+            prefetch = [
+                Prefetch(query = query_embedding, using = "text-embedding-3-small", limit = 20),
+                Prefetch(query = Document(text=query, model = "qdrant/bm25"), using = "bm25", limit = 20)
+            ],
+            query=models.RrfQuery(rrf = models.Rrf(weights=[3,1])),
+            limit=k)
+    else:
+         # Sprint 1 : lesson 5 - Weighted RRF
+        results = qdrant_client.query_points(
+            collection_name=qdrant_collection_name, 
+            query = query_embedding,
+            using = "text-embedding-3-small",
+            limit=k)
 
     retrieved_context_ids = []
     retrieved_context = []
@@ -67,7 +74,27 @@ def retrieve_context(query, qdrant_client, k=5):
         'retrieved_context_ratings': retrieved_context_ratings
     }
 #--------------------------------------------------------------
-@traceable( name = "process_context" )
+@traceable( name = "rerank_data",
+   run_type = "tool")
+def rerank_data(query, context, top_k):
+    cohere_client = cohere.ClientV2()
+    response = cohere_client.rerank(
+        model="rerank-v4.0-pro",
+        query=query,
+        documents = context["retrieved_context"],
+        top_n = top_k
+    )
+    order = [result.index for result in response.results]
+    return {
+         'retrieved_context_ids': [ context["retrieved_context_ids"][i] for i in order ],
+        'retrieved_context': [ context["retrieved_context"][i] for i in order ],
+        'similarity_scores': [ context["similarity_scores"][i] for i in order ],
+        'retrieved_context_ratings': [ context["retrieved_context_ratings"][i] for i in order ]
+    }
+
+#--------------------------------------------------------------
+@traceable( name = "process_context",
+            run_type = "prompt")
 def process_context(context):
     formated_context = ""
     for id, chunk, rating in zip(context['retrieved_context_ids'], context['retrieved_context'], context['retrieved_context_ratings']):
@@ -124,10 +151,17 @@ def generate_answer(prompt):
     return response
 #--------------------------------------------------------------
 @traceable( name = "rag_pipeline" )
-def rag_pipeline(query, qdrant_client, top_k= 5):
+def rag_pipeline(query, qdrant_client, top_k= 5, hybrid = True, rerank=False, retrieve_k=20):
 
     # retrieve chunks of ontext from RAG
-    retrieved_context = retrieve_context(query, qdrant_client, top_k)
+    retrieved_context = retrieve_data(
+                                            query, 
+                                            qdrant_client, 
+                                            k = retrieve_k if rerank else top_k, 
+                                            hybrid = hybrid)
+
+    if rerank:
+        retrieved_context = rerank_data(query, retrieved_context, top_k)
 
     # preprocessing chunks
     processed_context = process_context(retrieved_context)
