@@ -2,7 +2,6 @@ from openai import OpenAI
 from google import genai
 from api.core.config import config
 import logging
-
 #--------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,4 +28,3 @@ def _run_llm_google(model_name, messages):
         contents=[message["content"] for message in messages]
     )
     return response
-#--------------------------------------------------------------
