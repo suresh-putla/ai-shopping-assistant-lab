@@ -1,10 +1,10 @@
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, convert_to_openai_messages
+from langchain_core.messages import SystemMessage, convert_to_openai_messages, AIMessage
 from langsmith import traceable, get_current_run_tree
 from pydantic import BaseModel, Field
 import instructor
 from api.agents.utils.prompt_management import prompt_template_config
-from api.agents.tools import get_formatted_item_context
+from api.agents.tools import get_formatted_item_context, get_formatted_reviews_context
 ###############################################################
 #LANGGRAPH - AGENTS
 ###############################################################
@@ -15,6 +15,7 @@ class RAGUsedContext(BaseModel):
     description: str = Field(description="Description of the item used to answer the question")
 
 class FinalResponse(BaseModel):
+    """ call this tool when final answer is possible using available context """
     answer: str = Field(description="Answer to the question")
     references: list[RAGUsedContext] = Field(description="List of items used to answer the question")
 
@@ -31,10 +32,10 @@ def agent_node(state) -> dict:
     template = prompt_template_config("api/agents/prompts/qna_agent.yml", "qna_agent")
     prompt = template.render()
 
-    llm = ChatOpenAI(model="gpt-5.4-mini", reasoning_effort="none", use_responses_api=True)
+    llm = ChatOpenAI(model="gpt-5.4-mini", reasoning_effort="low", use_responses_api=True)
     llm_with_tools = llm.bind_tools(
-        [get_formatted_item_context, FinalResponse],
-        tool_choice="any"
+        [get_formatted_item_context, get_formatted_reviews_context, FinalResponse],
+        tool_choice="required"
     )
 
     response = llm_with_tools.invoke(
@@ -52,11 +53,6 @@ def agent_node(state) -> dict:
             "total_tokens": response.usage_metadata["total_tokens"]
         }
 
-
-
-
-
-
     final_answer = False
     answer = ""
     references = []
@@ -67,6 +63,7 @@ def agent_node(state) -> dict:
                 final_answer = True
                 answer = tool_call.get("args").get("answer")
                 references.extend(tool_call.get("args").get("references"))
+                response = AIMessage(content = answer)
 
     return {
         "messages": [response],
@@ -87,8 +84,7 @@ def intent_router_node(state) -> dict:
     messages = state.messages
 
     conversation = []
-    for message in messages:
-        conversation.append(convert_to_openai_messages(message))
+    conversation.append(convert_to_openai_messages(messages[-1]))
 
     instructor_client = instructor.from_provider("openai/gpt-5.4-mini", mode=instructor.Mode.RESPONSES_TOOLS)
 
@@ -108,9 +104,13 @@ def intent_router_node(state) -> dict:
             "output_tokens": raw_response.usage.output_tokens,
             "total_tokens": raw_response.usage.total_tokens
         }
+        trace_id = str(current_run.trace_id)
+    else:
+        trace_id = ""
 
     return {
         "question_relevant": response.question_relevant,
-        "answer": response.answer
+        "answer": response.answer,
+        "trace_id": trace_id
     }
 #--------------------------------------------------------------

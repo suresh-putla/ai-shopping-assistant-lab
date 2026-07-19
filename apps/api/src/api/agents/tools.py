@@ -4,6 +4,8 @@ import cohere
 from langsmith import traceable, get_current_run_tree
 from qdrant_client import QdrantClient
 from qdrant_client import models
+from qdrant_client.models import FieldCondition, MatchAny, Filter
+
 from qdrant_client.models import VectorParams, Distance, SparseVectorParams, Modifier, PayloadSchemaType, PointStruct, Document, Prefetch, FusionQuery
 from langchain_core.tools import tool
 #--------------------------------------------------------------
@@ -22,7 +24,7 @@ def get_embedding(text, model="text-embedding-3-small"):
     return response.data[0].embedding
 #--------------------------------------------------------------
 @traceable(name="retrieve_data",run_type="retriever")
-def retrieve_data(query, qdrant_client, k=5, hybrid=True):
+def retrieve_items_data(query, qdrant_client, k=5, hybrid=True):
 
     query_embedding = get_embedding(query)
 
@@ -83,10 +85,7 @@ def rerank_data(query, context, top_k=5):
         "retrieved_context_ratings": [context["retrieved_context_ratings"][i] for i in order]
     }
 #--------------------------------------------------------------
-@traceable(
-    name="format_retrieved_context",
-    run_type="prompt"
-)
+@traceable(name="format_retrieved_context", run_type="prompt")
 def process_context(context):
 
     formatted_context = ""
@@ -99,19 +98,34 @@ def process_context(context):
 @tool
 def get_formatted_item_context(query: str, top_k: int = 5) -> str:
 
-    """Get the top k context, each representing an inventory item for a given query.
-    
+    """Search available products and return the top k matching inventory items.
+
+    Expand the customer's question into 1-5 concise search statements and issue them
+    in parallel in a single turn. Each statement covers one distinct product or
+    attribute; no two may express the same intent. Use natural product-description
+    language. If no brand or model is specified, search broadly rather than refusing.
+
+        "Earphones for me and a waterproof speaker"
+            -> "Personal earphones" | "Waterproof speaker"
+        "A warm winter jacket for hiking"
+            -> "Insulated winter jacket" | "Hiking outerwear for cold weather"
+
+    Before calling, check what earlier calls in this conversation already returned.
+    Search only for what is missing; results already retrieved remain valid and must
+    not be fetched again.
+
     Args:
-        query: The query to get the top k context for
-        top_k: The number of context chunks to retrieve, works best with 5 or more
-    
+        query: A single search statement describing one product or attribute.
+        top_k: Number of items to retrieve. Works best with 5 or more.
+
     Returns:
-        A string of the top k context chunks with IDs and average ratings prepending each chunk, each representing an inventory item for a given query.
+        A string of the top k available products, each prefixed with its ID and
+        average rating.
     """
 
     qdrant_client = QdrantClient(url="http://qdrant:6333")
 
-    retrieved_context = retrieve_data(
+    retrieved_context = retrieve_items_data(
         query,
         qdrant_client,
         k=20
@@ -121,3 +135,87 @@ def get_formatted_item_context(query: str, top_k: int = 5) -> str:
     formatted_context = process_context(retrieved_context)
     print(f"get_formatted_item_context:Query {query} / Formatted Context : {formatted_context}")
     return formatted_context
+#--------------------------------------------------------------
+#- Retreive Reviews Data 
+#--------------------------------------------------------------
+@traceable(name="retrieve_prefiltered_reviews_data",run_type="retriever")
+def  retrieve_prefiltered_reviews_data(query, parent_asins, qdrant_client, k=5):
+
+    query_embedding = get_embedding(query)
+
+    results = qdrant_client.query_points(
+        collection_name="Amazon-reviews-collection-01",
+        prefetch=[
+            Prefetch(
+                query=query_embedding,
+                using="text-embedding-3-small",
+                filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="parent_asin",
+                            match=MatchAny(
+                                any=parent_asins
+                            )
+                        )
+                    ]
+                ),
+                limit=20
+            )
+        ],
+        query=FusionQuery(fusion="rrf"),
+        limit=k
+    )
+
+    retrieved_context_ids = []
+    retrieved_context = []
+    similarity_scores = []
+
+    for result in results.points:
+        retrieved_context_ids.append(result.payload["parent_asin"])
+        retrieved_context.append(result.payload["preprocessed_data"])
+        similarity_scores.append(result.score)
+
+    return {
+        "retrieved_context_ids": retrieved_context_ids,
+        "retrieved_context": retrieved_context,
+        "similarity_scores": similarity_scores,
+    }
+
+#--------------------------------------------------------------
+@traceable(name="format_retrieved_context", run_type="prompt")
+def process_reviews_context(context):
+
+    formatted_context = ""
+
+    for id, chunk in zip(context["retrieved_context_ids"], context["retrieved_context"]):
+        formatted_context += f"- ID: {id}, user review: {chunk}\n"
+
+    return formatted_context
+#--------------------------------------------------------------
+@tool
+def get_formatted_reviews_context(query: str, parent_asins: list[str], top_k: int = 5) -> str:
+
+    """Get the top k reviews matching a query for a list of prefiltered items.
+    
+    Args:
+        query: The query to get the top k reviews for
+        item_list: The list of item IDs to prefilter for before running the query
+        top_k: The number of reviews to retrieve, this should be at least 20 if multipple items are prefiltered
+    
+    Returns:
+        A string of the top k context chunks with IDs prepending each chunk, each representing a review for a given inventory item for a given query.
+    """
+    qdrant_client = QdrantClient(url="http://qdrant:6333")
+    retrieved_context = retrieve_prefiltered_reviews_data(
+        query,
+        parent_asins,
+        qdrant_client,
+        top_k
+    )
+    formatted_context = process_reviews_context(retrieved_context)
+
+    return formatted_context
+    #--------------------------------------------------------------
+    #--------------------------------------------------------------
+    #--------------------------------------------------------------
+    #--------------------------------------------------------------

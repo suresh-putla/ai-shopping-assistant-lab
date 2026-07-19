@@ -61,6 +61,7 @@ docker-compose.override.yml
 
 # Vector DB / local data stores
 qdrant_data/
+postgres_data/
 
 # Misc
 *.log
